@@ -31,6 +31,8 @@ NEWS_QUERIES = [
     "\"industrial heat\" electrification decarbonization",
     "\"carbon capture\" industrial decarbonization",
 ]
+BRANCH_SLUG_LENGTH = 72
+MAX_FILE_CONTENT_LENGTH = 150_000
 
 
 @dataclass(frozen=True)
@@ -66,7 +68,7 @@ def is_allowed_repo_path(path: str) -> bool:
 
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return slug[:48] or "update"
+    return slug[:BRANCH_SLUG_LENGTH] or "update"
 
 
 def read_repo_context() -> str:
@@ -247,7 +249,7 @@ def normalize_response(data: dict[str, Any]) -> dict[str, Any]:
         content = str(entry.get("content", ""))
         if not is_allowed_repo_path(path):
             raise ValueError(f"disallowed change path: {path!r}")
-        if len(content) > 150_000:
+        if len(content) > MAX_FILE_CONTENT_LENGTH:
             raise ValueError(f"content too large for {path!r}")
         changes.append({"path": path, "content": content})
 
