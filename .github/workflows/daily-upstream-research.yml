@@ -1,0 +1,113 @@
+name: Daily upstream research contribution
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: Days of recent news to review
+        required: false
+        default: "7"
+      dry_run:
+        description: Run the research and commit steps without opening an upstream PR
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+  pull-requests: write
+  models: read
+
+concurrency:
+  group: daily-upstream-research
+  cancel-in-progress: false
+
+jobs:
+  research-and-pr:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REPO: co3org/Industrial-Decarbonization
+      DAYS_BACK: ${{ inputs.days_back }}
+      RESEARCH_MODEL: openai/gpt-4.1-mini
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set workflow defaults
+        run: |
+          echo "DAYS_BACK=${DAYS_BACK:-7}" >> "$GITHUB_ENV"
+          echo "DRY_RUN=${{ inputs.dry_run || 'false' }}" >> "$GITHUB_ENV"
+
+      - name: Research candidate contributions
+        id: research
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python .github/scripts/daily_research.py
+
+      - name: Stop when nothing useful was found
+        if: steps.research.outputs.decision != 'propose_pr'
+        run: echo "${{ steps.research.outputs.summary }}"
+
+      - name: Configure git author
+        if: steps.research.outputs.decision == 'propose_pr'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create branch and commit changes
+        if: steps.research.outputs.decision == 'propose_pr'
+        id: commit
+        env:
+          PR_TITLE: ${{ steps.research.outputs.pr_title }}
+        run: |
+          BRANCH_NAME="automation/daily-research-${{ github.run_number }}-${{ steps.research.outputs.branch_suffix }}"
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+          git checkout -b "$BRANCH_NAME"
+          while IFS= read -r file; do
+            [ -n "$file" ] && git add -- "$file"
+          done <<'EOF'
+          ${{ steps.research.outputs.changed_files }}
+          EOF
+          if git diff --cached --quiet; then
+            echo "No material file changes were produced after applying the research result."
+            echo "branch_name=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "$PR_TITLE"
+          git push origin "HEAD:$BRANCH_NAME"
+
+      - name: Create upstream pull request
+        if: steps.research.outputs.decision == 'propose_pr' && steps.commit.outputs.branch_name != '' && env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
+          PR_TITLE: ${{ steps.research.outputs.pr_title }}
+          PR_BODY: ${{ steps.research.outputs.pr_body }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "UPSTREAM_PR_TOKEN secret is required to open PRs against $UPSTREAM_REPO."
+            exit 1
+          fi
+
+          BASE_BRANCH="$(gh api "repos/$UPSTREAM_REPO" --jq .default_branch)"
+          EXISTING_COUNT="$(gh pr list \
+            --repo "$UPSTREAM_REPO" \
+            --state open \
+            --json title \
+            | jq --arg title "$PR_TITLE" 'map(select(.title == $title)) | length')"
+
+          if [ "$EXISTING_COUNT" -gt 0 ]; then
+            echo "An open upstream PR with the same title already exists; skipping creation."
+            exit 0
+          fi
+
+          printf '%s' "$PR_BODY" > /tmp/daily-upstream-pr-body.md
+
+          gh pr create \
+            --repo "$UPSTREAM_REPO" \
+            --base "$BASE_BRANCH" \
+            --head "${{ github.repository_owner }}:${{ steps.commit.outputs.branch_name }}" \
+            --title "$PR_TITLE" \
+            --body-file /tmp/daily-upstream-pr-body.md

@@ -176,6 +176,8 @@ We welcome:
 - Translations and regional adaptations
 - Policy briefs and whitepapers
 
+Maintainers can also use the scheduled GitHub Actions workflow in `.github/workflows/daily-upstream-research.yml` to research recent industrial decarbonization developments and open a PR from this fork to the upstream repository. To enable upstream PR creation, configure an `UPSTREAM_PR_TOKEN` secret with permission to create pull requests on `co3org/Industrial-Decarbonization`.
+
 ## Notes
 
 This repository is part of the [Carbon3.net](https://www.carbon3.net/) framework for green solutions.
